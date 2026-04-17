@@ -1,0 +1,5 @@
+_target_: toy_disentanglement.task.LatentClassificationDataset
+latent_dim: ${latent_dim}
+num_samples: 5000
+num_tasks: ${num_tasks}
+bias: true

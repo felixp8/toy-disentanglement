@@ -1,0 +1,7 @@
+_target_: toy_disentanglement.task.LatentMLPDataset
+latent_dim: ${latent_dim}
+num_samples: 5000
+num_tasks: ${num_tasks}
+sparsity: 0.0
+mlp_nonlinearity: "relu"
+mlp_hidden_dim: 64

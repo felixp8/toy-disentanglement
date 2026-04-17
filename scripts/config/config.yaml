@@ -1,0 +1,24 @@
+defaults:
+  - model: default
+  - dataset: unbiased_classification
+  - embedding: default
+  - _self_
+
+run_name: ${now:%Y-%m-%d_%H-%M-%S}
+latent_dim: 5
+representation_dim: 64
+num_tasks: 5
+num_samples: 5000
+batch_size: 256
+num_epochs: 100
+lr: 1e-3
+weight_decay: 0
+eval_freq: 10
+chkpt_freq: 10
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

@@ -1,0 +1,16 @@
+_target_: toy_disentanglement.task.create_embedding_autoencoder
+input_dim: ${latent_dim}
+representation_dim: ${representation_dim}
+encoder_hidden_dims: [${representation_dim}, ${representation_dim}]
+decoder_hidden_dims: [${representation_dim}, ${representation_dim}]
+noise_std: 0.0
+activation: "relu"
+
+# training parameters
+train: false  # optional
+num_epochs: 100
+batch_size: 32
+learning_rate: 1e-3
+l2_penalty_weight: 0.1
+pr_penalty_weight: 0.1
+verbose: false
