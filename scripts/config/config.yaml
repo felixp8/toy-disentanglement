@@ -5,16 +5,15 @@ defaults:
   - _self_
 
 run_name: ${now:%Y-%m-%d_%H-%M-%S}
-latent_dim: 5
-representation_dim: 64
-num_tasks: 5
-num_samples: 5000
 batch_size: 256
-num_epochs: 100
+num_epochs: 1000
 lr: 1e-3
-weight_decay: 0
+weight_decay: 1e-6
 eval_freq: 10
-chkpt_freq: 10
+chkpt_freq: 100
+patience: 50
+wandb: false
+verbose: false
 
 hydra:
   run:

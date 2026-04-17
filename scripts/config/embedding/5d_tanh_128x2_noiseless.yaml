@@ -8,7 +8,9 @@ decoder_hidden_dims:
   - 128
   - 128
 noise_std: 0.0
-activation: "relu"
+activation: "tanh"
+
+checkpoint_path: "data/embedding_nets/embedding_ae_5d_tanh_128x2_noiseless.pth"
 
 # training parameters
 train: true  # optional

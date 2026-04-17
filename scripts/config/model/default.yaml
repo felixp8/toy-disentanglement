@@ -1,6 +1,6 @@
 _target_: toy_disentanglement.model.MLP
-input_dim: ${representation_dim}
-output_dim: ${num_tasks}
+input_dim: ${embedding.representation_dim}
+output_dim: ${dataset.num_tasks}
 hidden_dims: [128, 128]
 activation: "relu"
 output_activation: "tanh"

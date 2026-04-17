@@ -1,8 +1,11 @@
 import numpy as np
 import torch 
 import torch.nn as nn
+from pathlib import Path
 
 from toy_disentanglement.utils import get_activation_cls
+
+ROOT = Path(__file__).parent.parent
 
 
 # ==== Datasets ==== #
@@ -105,6 +108,8 @@ def create_embedding_autoencoder(
     l2_penalty_weight: float = 0.1,
     pr_penalty_weight: float = 0.1,
     verbose: bool = False,
+    # load checkpoint option
+    checkpoint_path: str = None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = EmbeddingAutoencoder(
@@ -115,6 +120,10 @@ def create_embedding_autoencoder(
         noise_std=noise_std,
         activation=activation,
     ).to(device)
+
+    if checkpoint_path is not None:
+        model.load_state_dict(torch.load(ROOT / checkpoint_path, map_location=device))
+        return model
 
     data_dist = torch.distributions.normal.Normal(
         torch.zeros(input_dim), torch.ones(input_dim)

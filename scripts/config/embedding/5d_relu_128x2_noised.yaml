@@ -7,8 +7,10 @@ encoder_hidden_dims:
 decoder_hidden_dims: 
   - 128
   - 128
-noise_std: 0.0
+noise_std: 0.003
 activation: "relu"
+
+checkpoint_path: "data/embedding_nets/embedding_ae_5d_relu_128x2_noised.pth"
 
 # training parameters
 train: true  # optional

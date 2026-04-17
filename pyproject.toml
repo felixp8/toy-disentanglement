@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toy_disentanglement"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "scikit-learn",
+    "torch>=2.0.0",
+    "hydra-core",
+    "wandb",
+]
+
+[tool.setuptools.packages.find]
+include=["toy_disentanglement"]

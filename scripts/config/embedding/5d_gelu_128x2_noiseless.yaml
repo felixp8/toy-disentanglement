@@ -1,6 +1,6 @@
 _target_: toy_disentanglement.task.create_embedding_autoencoder
-input_dim: 5
-representation_dim: 128
+input_dim: ${latent_dim}
+representation_dim: ${representation_dim}
 encoder_hidden_dims: 
   - 128
   - 128
@@ -8,7 +8,9 @@ decoder_hidden_dims:
   - 128
   - 128
 noise_std: 0.0
-activation: "relu"
+activation: "gelu"
+
+checkpoint_path: "data/embedding_nets/embedding_ae_5d_gelu_128x2_noiseless.pth"
 
 # training parameters
 train: true  # optional
