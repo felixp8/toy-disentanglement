@@ -7,13 +7,14 @@ defaults:
 run_name: ${now:%Y-%m-%d_%H-%M-%S}
 batch_size: 256
 num_epochs: 1000
-lr: 1e-3
+lr: 1e-4
 weight_decay: 1e-6
 eval_freq: 10
 chkpt_freq: 100
-patience: 50
+patience: -1
 wandb: false
 verbose: false
+sweep_id: null
 
 hydra:
   run:

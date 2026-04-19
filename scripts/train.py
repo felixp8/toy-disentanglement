@@ -8,8 +8,9 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
+import time
 
-from toy_disentanglement.metrics import classification_generalization_accuracy, regression_generalization_r2
+from toy_disentanglement.metrics import classification_generalization_accuracy, regression_generalization_r2, representation_intrinsic_dimension
 
 ROOT = Path(__file__).parent.parent
 
@@ -34,7 +35,7 @@ def main(cfg: DictConfig) -> None:
 
     run = None
     if cfg.wandb:
-        run = wandb.init(project="toy-disentanglement", config=OmegaConf.to_container(cfg), name=cfg.run_name, dir=str(run_dir))
+        run = wandb.init(project="toy-disentanglement", config=OmegaConf.to_container(cfg), name=cfg.run_name, dir=str(run_dir), reinit="create_new")
 
     embedding_network = instantiate(cfg.embedding)
     torch.save(embedding_network.state_dict(), run_dir / "embedding_network.pt")
@@ -52,7 +53,7 @@ def main(cfg: DictConfig) -> None:
 
     # model = MLP(representation_dim, num_tasks, [representation_dim]*3, activation="relu")
     model = instantiate(cfg.model)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = torch.nn.MSELoss()
     data_dist = torch.distributions.normal.Normal(torch.zeros(latent_dim), torch.ones(latent_dim))
 
@@ -94,16 +95,17 @@ def main(cfg: DictConfig) -> None:
             else:
                 counter += 1
             
-            if counter >= patience:
-                print(f"Early stopping at epoch {epoch} with best val loss {min(val_loss_history):.4f}")
-                break
+            if patience > 0:
+                if counter >= patience:
+                    print(f"Early stopping at epoch {epoch} with best val loss {min(val_loss_history):.4f}", flush=True)
+                    break
         
         # if run is not None:
         #     run.log({"train_loss": train_loss, "val_loss": val_loss}, step=epoch)
 
         if eval_freq > 0 and epoch % eval_freq == 0:
             if run is not None:
-                run.log({"train_loss": train_loss, "val_loss": val_loss}, step=epoch)
+                run.log({"loss/train": train_loss, "loss/val": val_loss}, step=epoch)
 
             train_acc_ub, test_acc_ub = classification_generalization_accuracy(
                 rep_fn=model.get_all_layer_representations,
@@ -125,12 +127,17 @@ def main(cfg: DictConfig) -> None:
                 data_dist=data_dist,
                 num_tasks=10,
             )
-            train_acc_ub = np.mean(train_acc_ub, axis=0)
-            test_acc_ub = np.mean(test_acc_ub, axis=0)
-            train_acc_b = np.mean(train_acc_b, axis=0)
-            test_acc_b = np.mean(test_acc_b, axis=0)
-            train_r2 = np.mean(train_r2, axis=0)
-            test_r2 = np.mean(test_r2, axis=0)
+            intrinsic_dimensions = representation_intrinsic_dimension(
+                rep_fn=model.get_all_layer_representations,
+                embed_fn=embedding_network.encoder,
+                data_dist=data_dist,
+            )
+            train_acc_ub = np.nanmean(train_acc_ub, axis=0)
+            test_acc_ub = np.nanmean(test_acc_ub, axis=0)
+            train_acc_b = np.nanmean(train_acc_b, axis=0)
+            test_acc_b = np.nanmean(test_acc_b, axis=0)
+            train_r2 = np.nanmean(train_r2, axis=0)
+            test_r2 = np.nanmean(test_r2, axis=0)
             metric_history.append({
                 "train_acc_ub": train_acc_ub,
                 "test_acc_ub": test_acc_ub,
@@ -138,34 +145,40 @@ def main(cfg: DictConfig) -> None:
                 "test_acc_b": test_acc_b,
                 "train_r2": train_r2,
                 "test_r2": test_r2,
+                "intrinsic_dimensions": intrinsic_dimensions,
             })
 
             if run is not None:
                 run.log({
-                    "train_acc_ub_max": train_acc_ub.max(),
-                    "test_acc_ub_max": test_acc_ub.max(),
-                    "train_acc_ub_last": train_acc_ub[-1],
-                    "test_acc_ub_last": test_acc_ub[-1],
-                    "train_acc_ub_median": np.median(train_acc_ub),
-                    "test_acc_ub_median": np.median(test_acc_ub),
-                    "train_acc_ub_argmax": np.argmax(train_acc_ub),
-                    "test_acc_ub_argmax": np.argmax(test_acc_ub),
-                    "train_acc_b_max": train_acc_b.max(),
-                    "test_acc_b_max": test_acc_b.max(),
-                    "train_acc_b_last": train_acc_b[-1],
-                    "test_acc_b_last": test_acc_b[-1],
-                    "train_acc_b_median": np.median(train_acc_b),
-                    "test_acc_b_median": np.median(test_acc_b),
-                    "train_acc_b_argmax": np.argmax(train_acc_b),
-                    "test_acc_b_argmax": np.argmax(test_acc_b),
-                    "train_r2_max": train_r2.max(),
-                    "test_r2_max": test_r2.max(),
-                    "train_r2_last": train_r2[-1],
-                    "test_r2_last": test_r2[-1],
-                    "train_r2_median": np.median(train_r2),
-                    "test_r2_median": np.median(test_r2),
-                    "train_r2_argmax": np.argmax(train_r2),
-                    "test_r2_argmax": np.argmax(test_r2),
+                    "acc_ub/train_max": train_acc_ub.max(),
+                    "acc_ub/test_max": test_acc_ub.max(),
+                    "acc_ub/train_last": train_acc_ub[-1],
+                    "acc_ub/test_last": test_acc_ub[-1],
+                    "acc_ub/train_median": np.nanmedian(train_acc_ub),
+                    "acc_ub/test_median": np.nanmedian(test_acc_ub),
+                    "acc_ub/train_argmax": np.argmax(train_acc_ub),
+                    "acc_ub/test_argmax": np.argmax(test_acc_ub),
+                    "acc_b/train_max": train_acc_b.max(),
+                    "acc_b/test_max": test_acc_b.max(),
+                    "acc_b/train_last": train_acc_b[-1],
+                    "acc_b/test_last": test_acc_b[-1],
+                    "acc_b/train_median": np.nanmedian(train_acc_b),
+                    "acc_b/test_median": np.nanmedian(test_acc_b),
+                    "acc_b/train_argmax": np.argmax(train_acc_b),
+                    "acc_b/test_argmax": np.argmax(test_acc_b),
+                    "r2/train_max": train_r2.max(),
+                    "r2/test_max": test_r2.max(),
+                    "r2/train_last": train_r2[-1],
+                    "r2/test_last": test_r2[-1],
+                    "r2/train_median": np.nanmedian(train_r2),
+                    "r2/test_median": np.nanmedian(test_r2),
+                    "r2/train_argmax": np.argmax(train_r2),
+                    "r2/test_argmax": np.argmax(test_r2),
+                    "intrinsic_dim/last": intrinsic_dimensions[-1],
+                    "intrinsic_dim/min": intrinsic_dimensions.min(),
+                    "intrinsic_dim/max": intrinsic_dimensions.max(),
+                    "intrinsic_dim/argmin": np.argmin(intrinsic_dimensions),
+                    "intrinsic_dim/argmax": np.argmax(intrinsic_dimensions),
                 }, step=epoch)
 
             if verbose:
@@ -173,7 +186,8 @@ def main(cfg: DictConfig) -> None:
                     f"Epoch {epoch}: Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, "
                     f"Test Acc UB={test_acc_ub.max():.4f}, "
                     f"Test Acc B={test_acc_b.max():.4f}, "
-                    f"Test R2={test_r2.max():.4f}"
+                    f"Test R2={test_r2.max():.4f}",
+                    flush=True
                 )
         
         if chkpt_freq > 0 and epoch % chkpt_freq == 0:
@@ -189,6 +203,8 @@ def main(cfg: DictConfig) -> None:
 
     if run is not None:
         run.finish()
+    
+    time.sleep(1.0)
 
 
 if __name__ == "__main__":    

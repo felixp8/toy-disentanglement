@@ -36,7 +36,7 @@ class MLP(nn.Module):
     @torch.no_grad()
     def get_all_layer_representations(self, x):
         representations = []
-        for i in range(1, len(self.layers), 2):  # get representations after each nonlinear activation
+        for i in range(1, len(self.layers) - 2, 2):  # get representations after each nonlinear activation, excluding output
             x = self.layers[i-1](x)  # Linear layer
             x = self.layers[i](x)    # Activation layer
             representations.append(x)

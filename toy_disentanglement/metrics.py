@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+import skdim
 from sklearn.linear_model import LogisticRegression, Ridge
 
 
@@ -44,6 +45,15 @@ def classification_generalization_accuracy(
             split_weight = split_weight / torch.norm(split_weight)
         train_mask = (samples @ split_weight) >= 0
         test_mask = (samples @ split_weight) < 0
+
+        if len(torch.unique(labels[train_mask])) < 2:
+            if isinstance(representations, list):
+                train_accuracies.append(np.full((len(representations),), np.nan))
+                test_accuracies.append(np.full((len(representations),), np.nan))
+            else:
+                train_accuracies.append(np.nan)
+                test_accuracies.append(np.nan)
+            continue
 
         if isinstance(representations, list):
             layer_train_accuracies = []
@@ -159,3 +169,26 @@ def regression_generalization_r2(
         test_r2s = test_r2s[:, np.newaxis]
 
     return train_r2s, test_r2s
+
+
+@torch.no_grad()
+def representation_intrinsic_dimension(
+    rep_fn,
+    data_dist,
+    embed_fn,
+):
+    data = data_dist.sample((1000,))
+    embeddings = embed_fn(data)
+    representations = rep_fn(embeddings)
+    if isinstance(representations, list):
+        dimensions = []
+        for i in range(len(representations)):
+            twonn = skdim.id.TwoNN()
+            twonn.fit(representations[i])
+            dimensions.append(twonn.dimension_)
+    else:
+        dimensions = []
+        twonn = skdim.id.TwoNN()
+        twonn.fit(representations)
+        dimensions.append(twonn.dimension_)
+    return np.array(dimensions)

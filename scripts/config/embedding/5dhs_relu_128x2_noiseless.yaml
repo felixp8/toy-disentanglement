@@ -1,0 +1,22 @@
+_target_: toy_disentanglement.task.create_embedding_autoencoder
+input_dim: 5
+representation_dim: 128
+encoder_hidden_dims: 
+  - 128
+  - 128
+decoder_hidden_dims: 
+  - 128
+  - 128
+noise_std: 0.0
+activation: "relu"
+
+checkpoint_path: "data/embedding_nets/embedding_hsae_5d_relu_128x2_noiseless.pth"
+
+# training parameters
+train: true  # optional
+num_epochs: 2000
+batch_size: 256
+learning_rate: 1e-3
+l2_penalty_weight: 0.1
+pr_penalty_weight: 0.1
+verbose: false

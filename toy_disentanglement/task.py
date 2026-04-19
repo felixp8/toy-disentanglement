@@ -31,7 +31,7 @@ class LatentClassificationDataset(torch.utils.data.Dataset):
         self.task_weights = torch.randn(self.latents.shape[1], self.num_tasks)
         self.task_weights = self.task_weights / torch.norm(self.task_weights, dim=0, keepdim=True)  # Normalize to unit length
         if self.bias:
-            self.task_bias = torch.randn(self.num_tasks)
+            self.task_bias = torch.rand(self.num_tasks) * 2 - 1  # uniform over [-1, 1]
         else:
             self.task_bias = torch.zeros(self.num_tasks)
         self.task_labels = torch.sign(self.latents @ self.task_weights + self.task_bias)  # (N, T)
@@ -110,9 +110,18 @@ def create_embedding_autoencoder(
     verbose: bool = False,
     # load checkpoint option
     checkpoint_path: str = None,
+    embedding_type: str = "standard",  # "standard" or "sphere"
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = EmbeddingAutoencoder(
+
+    if embedding_type == "standard":
+        model_cls = EmbeddingAutoencoder
+    elif embedding_type == "sphere":
+        model_cls = SphereEmbeddingAutoencoder
+    else:
+        raise ValueError(f"Invalid embedding_type: {embedding_type}")
+
+    model = model_cls(
         input_dim=input_dim,
         representation_dim=representation_dim,
         encoder_hidden_dims=encoder_hidden_dims,
@@ -232,5 +241,32 @@ class EmbeddingAutoencoder(nn.Module):
 
     def forward(self, x):
         z = self.encoder(x)
+        x_hat = self.decoder(z)
+        return x_hat, z
+
+
+class SphereEmbeddingAutoencoder(nn.Module):
+    def __init__(self, input_dim, representation_dim, encoder_hidden_dims=[], decoder_hidden_dims=[], noise_std=0.01, activation="relu"):
+        super(SphereEmbeddingAutoencoder, self).__init__()
+        self.input_dim = input_dim
+        self.representation_dim = representation_dim
+        self.encoder_hidden_dims = encoder_hidden_dims
+        self.decoder_hidden_dims = decoder_hidden_dims
+        self.noise_std = noise_std
+        self.activation = activation
+
+        self.base_encoder = EmbeddingEncoder(input_dim, representation_dim - 1, encoder_hidden_dims, noise_std, activation)
+        self.decoder = EmbeddingDecoder(representation_dim, input_dim, decoder_hidden_dims, activation)
+    
+    def encoder(self, x):
+        x_norm = torch.norm(x, dim=-1, keepdim=True)
+        x_normalized = x / torch.norm(x, dim=-1, keepdim=True)  # Project input onto sphere
+        z = self.base_encoder(x_normalized)
+        z = torch.cat([z, x_norm], dim=-1)  # Append norm as additional dimension
+        return z
+    
+    def forward(self, x):
+        z = self.encoder(x)
+        z = z / torch.norm(z, dim=-1, keepdim=True)  # Project onto sphere
         x_hat = self.decoder(z)
         return x_hat, z

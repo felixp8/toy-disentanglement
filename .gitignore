@@ -209,3 +209,5 @@ __marimo__/
 # custom entries
 runs/
 data/
+*.log
+scripts/multirun/
