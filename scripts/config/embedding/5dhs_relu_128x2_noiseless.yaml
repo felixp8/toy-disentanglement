@@ -9,6 +9,7 @@ decoder_hidden_dims:
   - 128
 noise_std: 0.0
 activation: "relu"
+embedding_type: "sphere"
 
 checkpoint_path: "data/embedding_nets/embedding_hsae_5d_relu_128x2_noiseless.pth"
 

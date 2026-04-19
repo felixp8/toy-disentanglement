@@ -1,6 +1,7 @@
 import numpy as np
 import torch 
 import torch.nn as nn
+import warnings
 from pathlib import Path
 
 from toy_disentanglement.utils import get_activation_cls
@@ -11,16 +12,23 @@ ROOT = Path(__file__).parent.parent
 # ==== Datasets ==== #
 
 class LatentClassificationDataset(torch.utils.data.Dataset):
-    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, bias=False):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, bias=False, correlation=0.0):
         self.latent_dim = latent_dim
         self.num_samples = num_samples
         self.embedding_fn = embedding_fn
         self.num_tasks = num_tasks
         self.bias = bias
+        self.correlation = correlation
 
-        self.data_dist = torch.distributions.normal.Normal(
-            torch.zeros(latent_dim), torch.ones(latent_dim)
-        )
+        if correlation != 0.0:
+            covariance = torch.eye(latent_dim) * (1 - correlation) + torch.ones((latent_dim, latent_dim)) * correlation
+            self.data_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(latent_dim), covariance
+            )
+        else:
+            self.data_dist = torch.distributions.normal.Normal(
+                torch.zeros(latent_dim), torch.ones(latent_dim)
+            )
 
         self._init_data()
 
@@ -43,17 +51,146 @@ class LatentClassificationDataset(torch.utils.data.Dataset):
         return self.latents[idx], self.representations[idx], self.task_labels[idx]
 
 
+class LatentTanhDataset(torch.utils.data.Dataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, bias=False, correlation=0.0):
+        self.latent_dim = latent_dim
+        self.num_samples = num_samples
+        self.embedding_fn = embedding_fn
+        self.num_tasks = num_tasks
+        self.bias = bias
+        self.correlation = correlation
+
+        if correlation != 0.0:
+            covariance = torch.eye(latent_dim) * (1 - correlation) + torch.ones((latent_dim, latent_dim)) * correlation
+            self.data_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(latent_dim), covariance
+            )
+        else:
+            self.data_dist = torch.distributions.normal.Normal(
+                torch.zeros(latent_dim), torch.ones(latent_dim)
+            )
+
+        self._init_data()
+
+    @torch.no_grad()
+    def _init_data(self):
+        self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
+        self.representations = self.embedding_fn(self.latents)  # (N, R)
+        self.task_weights = torch.randn(self.latents.shape[1], self.num_tasks)
+        self.task_weights = self.task_weights / torch.norm(self.task_weights, dim=0, keepdim=True)  # Normalize to unit length
+        if self.bias:
+            self.task_bias = torch.rand(self.num_tasks) * 2 - 1  # uniform over [-1, 1]
+        else:
+            self.task_bias = torch.zeros(self.num_tasks)
+        self.task_labels = torch.tanh(self.latents @ self.task_weights + self.task_bias)  # (N, T)
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return self.latents[idx], self.representations[idx], self.task_labels[idx]
+    
+
+class LatentSparseClassificationDataset(LatentClassificationDataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, bias=False, correlation=0.0, sparsity=0.0):
+        if (1 - sparsity) < (1 / latent_dim):
+            warnings.warn(
+                f"Sparsity level {sparsity} is too high for latent dimension {latent_dim}, "
+                f"must have at least 1 nonzero weight per task. Setting sparsity to {1 - 1/latent_dim}."
+            )
+            sparsity = 1 - 1/latent_dim
+        self.sparsity = sparsity
+
+        super().__init__(
+            latent_dim=latent_dim, num_samples=num_samples, num_tasks=num_tasks, 
+            embedding_fn=embedding_fn, bias=bias, correlation=correlation,
+        )
+
+    @torch.no_grad()
+    def _init_data(self):
+        self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
+        self.representations = self.embedding_fn(self.latents)  # (N, R)
+
+        self.task_weights = torch.zeros(self.latents.shape[1], self.num_tasks)  # (L, T)
+        for t in range(self.num_tasks):
+            if (1 - self.sparsity) <= (1 / self.latent_dim):
+                num_nonzero = 1  # Ensure at least 1 nonzero weight
+            else:
+                num_nonzero = 1 + torch.poisson(self.latent_dim * (1 - self.sparsity) - 1).int().item()  # Ensure at least 1 nonzero weight
+            nonzero_indices = torch.randperm(self.latent_dim)[:num_nonzero]
+            self.task_weights[nonzero_indices, t] = torch.randn(num_nonzero)
+        self.task_weights = self.task_weights / torch.norm(self.task_weights, dim=0, keepdim=True)  # Normalize to unit length
+        if self.bias:
+            self.task_bias = torch.rand(self.num_tasks) * 2 - 1  # uniform over [-1, 1]
+        else:
+            self.task_bias = torch.zeros(self.num_tasks)
+        self.task_labels = torch.sign(self.latents @ self.task_weights + self.task_bias)  # (N, T)
+
+
+
+    
+
+class LatentSparseTanhDataset(LatentTanhDataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, bias=False, correlation=0.0, sparsity=0.0):
+        if (1 - sparsity) < (1 / latent_dim):
+            warnings.warn(
+                f"Sparsity level {sparsity} is too high for latent dimension {latent_dim}, "
+                f"must have at least 1 nonzero weight per task. Setting sparsity to {1 - 1/latent_dim}."
+            )
+            sparsity = 1 - 1/latent_dim
+        self.sparsity = sparsity
+
+        super().__init__(
+            latent_dim=latent_dim, num_samples=num_samples, num_tasks=num_tasks, 
+            embedding_fn=embedding_fn, bias=bias, correlation=correlation,
+        )
+
+    @torch.no_grad()
+    def _init_data(self):
+        self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
+        self.representations = self.embedding_fn(self.latents)  # (N, R)
+
+        self.task_weights = torch.zeros(self.latents.shape[1], self.num_tasks)  # (L, T)
+        for t in range(self.num_tasks):
+            if (1 - self.sparsity) <= (1 / self.latent_dim):
+                num_nonzero = 1  # Ensure at least 1 nonzero weight
+            else:
+                num_nonzero = 1 + torch.poisson(self.latent_dim * (1 - self.sparsity) - 1).int().item()  # Ensure at least 1 nonzero weight
+            nonzero_indices = torch.randperm(self.latent_dim)[:num_nonzero]
+            self.task_weights[nonzero_indices, t] = torch.randn(num_nonzero)
+        self.task_weights = self.task_weights / torch.norm(self.task_weights, dim=0, keepdim=True)  # Normalize to unit length
+        if self.bias:
+            self.task_bias = torch.rand(self.num_tasks) * 2 - 1  # uniform over [-1, 1]
+        else:
+            self.task_bias = torch.zeros(self.num_tasks)
+        self.task_labels = torch.tanh(self.latents @ self.task_weights + self.task_bias)  # (N, T)
+
+
 class LatentMLPDataset(torch.utils.data.Dataset):
-    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, sparsity=0.0, mlp_nonlinearity="relu", mlp_hidden_dim=64):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, sparsity=0.0, mlp_nonlinearity="relu", mlp_hidden_dim=64, correlation=0.0):
         self.latent_dim = latent_dim
         self.num_samples = num_samples
         self.num_tasks = num_tasks
         self.embedding_fn = embedding_fn
-        self.sparsity = sparsity
         self.mlp_nonlinearity = mlp_nonlinearity
         self.mlp_hidden_dim = mlp_hidden_dim
+        self.correlation = correlation
 
-        self.data_dist = torch.distributions.normal.Normal(
+        if (1 - sparsity) < (1 / latent_dim):
+            warnings.warn(
+                f"Sparsity level {sparsity} is too high for latent dimension {latent_dim}, "
+                f"must have at least 1 nonzero weight per task. Setting sparsity to {1 - 1/latent_dim}."
+            )
+            sparsity = 1 - 1/latent_dim
+        self.sparsity = sparsity
+
+        if correlation != 0.0:
+            covariance = torch.eye(latent_dim) * (1 - correlation) + torch.ones((latent_dim, latent_dim)) * correlation
+            self.data_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(latent_dim), covariance
+            )
+        else:
+            self.data_dist = torch.distributions.normal.Normal(
             torch.zeros(latent_dim), torch.ones(latent_dim)
         )
 
@@ -63,7 +200,15 @@ class LatentMLPDataset(torch.utils.data.Dataset):
     def _init_data(self):
         self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
         self.representations = self.embedding_fn(self.latents)  # (N, R)
-        self.jacobian_mask = torch.rand((self.num_tasks, self.latent_dim)) > self.sparsity  # (T, L)
+
+        self.jacobian_mask = torch.zeros(self.latent_dim, self.num_tasks)  # (L, T)
+        for t in range(self.num_tasks):
+            if (1 - self.sparsity) <= (1 / self.latent_dim):
+                num_nonzero = 1  # Ensure at least 1 nonzero weight
+            else:
+                num_nonzero = 1 + torch.poisson(self.latent_dim * (1 - self.sparsity) - 1).int().item()  # Ensure at least 1 nonzero weight
+            nonzero_indices = torch.randperm(self.latent_dim)[:num_nonzero]
+            self.jacobian_mask[nonzero_indices, t] = 1.0
 
         activation_cls = get_activation_cls(self.mlp_nonlinearity)
         mlps = []
@@ -75,7 +220,7 @@ class LatentMLPDataset(torch.utils.data.Dataset):
                 activation_cls(),
                 nn.Linear(self.mlp_hidden_dim, 1),
             )
-            mlp.layers[0].weight.data *= self.jacobian_mask[t].unsqueeze(1)  # Mask the input weights to enforce sparsity
+            mlp.layers[0].weight.data *= self.jacobian_mask[:, t].unsqueeze(1)  # Mask the input weights to enforce sparsity
             mlps.append(mlp)
         self.mlps = nn.ModuleList(mlps)
 

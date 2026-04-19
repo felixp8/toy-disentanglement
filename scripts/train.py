@@ -28,6 +28,11 @@ def main(cfg: DictConfig) -> None:
     patience = cfg.patience
     
     run_dir = ROOT / "runs" / cfg.run_name
+    if (run_dir / "config.yaml").exists():
+        i = 1
+        while (ROOT / "runs" / f"{cfg.run_name}_{i}" / "config.yaml").exists():
+            i += 1
+        run_dir = ROOT / "runs" / f"{cfg.run_name}_{i}"
     run_dir.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(config=cfg, f=run_dir / "config.yaml")
     if chkpt_freq > 0:
