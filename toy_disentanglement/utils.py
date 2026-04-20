@@ -12,6 +12,8 @@ def get_activation_cls(nonlinearity):
         activation_cls = nn.LeakyReLU
     elif nonlinearity == "gelu":
         activation_cls = nn.GELU
+    elif nonlinearity == "none":
+        activation_cls = nn.Identity
     else:
         raise ValueError(f"Unknown nonlinearity: {nonlinearity}")
     return activation_cls

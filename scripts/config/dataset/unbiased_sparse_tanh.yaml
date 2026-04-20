@@ -3,3 +3,4 @@ latent_dim: ${embedding.input_dim}
 num_samples: 16384
 num_tasks: 5
 bias: false
+sparsity: 0.7
