@@ -1,0 +1,7 @@
+_target_: toy_disentanglement.task.LatentSinDataset
+latent_dim: ${embedding.input_dim}
+num_samples: 16384
+num_tasks: 5
+bias: true
+sparsity: 0.7
+sin_scale: 1.0
