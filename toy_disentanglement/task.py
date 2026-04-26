@@ -163,6 +163,113 @@ class LatentInvDataset(LatentTanhDataset):
         self.task_labels = 1 / (torch.abs((self.latents @ self.task_weights) * torch.exp(self.log_scale) + self.task_bias) + 1)  # (N, T)
 
 
+class LatentSparseMultiLinearDataset(torch.utils.data.Dataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, task_dim=1, bias=False, correlation=0.0, sparsity=0.0, task_correlation=0.0):
+        self.latent_dim = latent_dim
+        self.num_samples = num_samples
+        self.embedding_fn = embedding_fn
+        self.num_tasks = num_tasks
+        self.task_dim = task_dim
+        self.bias = bias
+        self.correlation = correlation
+        self.task_correlation = task_correlation
+
+        if task_dim <= 0:
+            raise ValueError("task_dim must be positive")
+        elif task_dim > latent_dim:
+            raise ValueError("task_dim cannot be greater than latent_dim")
+
+        if (1 - sparsity) < (1 / latent_dim):
+            warnings.warn(
+                f"Sparsity level {sparsity} is too high for latent dimension {latent_dim}, "
+                f"must have at least 1 nonzero weight per task. Setting sparsity to {1 - 1/latent_dim}."
+            )
+            sparsity = 1 - 1/latent_dim
+        self.sparsity = sparsity
+
+        if correlation != 0.0:
+            covariance = torch.eye(latent_dim) * (1 - correlation) + torch.ones((latent_dim, latent_dim)) * correlation
+            self.data_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(latent_dim), covariance
+            )
+        else:
+            self.data_dist = torch.distributions.normal.Normal(
+                torch.zeros(latent_dim), torch.ones(latent_dim)
+            )
+
+        self._init_data()
+
+    @torch.no_grad()
+    def _init_data(self):
+        self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
+        self.representations = self.embedding_fn(self.latents)  # (N, R)
+
+        if self.task_correlation != 0.0:
+            task_covariance = torch.eye(self.latent_dim) * (1 - self.task_correlation) + torch.ones((self.latent_dim, self.latent_dim)) * self.task_correlation
+            task_weights_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(self.latent_dim), task_covariance
+            )
+            task_weights = task_weights_dist.sample((self.num_tasks * self.task_dim,)).T  # (L, T)
+            self.task_weights = task_weights.reshape(self.latent_dim, self.task_dim, self.num_tasks)  # (L, D, T)
+        else:
+            self.task_weights = torch.randn(self.latents.shape[1], self.task_dim, self.num_tasks)  # (L, D, T)
+
+        for t in range(self.num_tasks):
+            if (1 - self.sparsity) <= (1 / self.latent_dim):
+                num_nonzero = 1  # Ensure at least 1 nonzero weight
+            elif self.sparsity == 0.0:
+                num_nonzero = self.latent_dim  # No sparsity, all weights are nonzero
+            else:
+                num_nonzero = 1 + torch.binomial(
+                    torch.tensor(self.latent_dim - 1.0),
+                    torch.tensor((self.latent_dim * (1 - self.sparsity) - 1) / (self.latent_dim - 1)),
+                ).int().item()
+            # nonzero_indices = torch.randperm(self.latent_dim)[:num_nonzero]
+            zero_indices = torch.randperm(self.latent_dim)[:(self.latent_dim - num_nonzero)]
+            self.task_weights[zero_indices, :, t] = 0.0
+        self.task_weights = self.task_weights / torch.norm(self.task_weights, dim=0, keepdim=True)  # Normalize to unit length
+
+        if self.bias:
+            self.task_bias = torch.rand(self.task_dim, self.num_tasks) * 2 - 1  # uniform over [-1, 1]
+        else:
+            self.task_bias = torch.zeros(self.task_dim, self.num_tasks)
+
+        self._generate_labels()
+    
+    @torch.no_grad()
+    def _generate_labels(self):
+        task_proj = torch.einsum('ni,ijd->njd', self.latents, self.task_weights) + self.task_bias  # (N, D, T)
+        self.task_labels = task_proj.sum(dim=1)  # (N, T)
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return self.latents[idx], self.representations[idx], self.task_labels[idx]
+
+
+class LatentMultiWaveletDataset(LatentSparseMultiLinearDataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, task_dim=1, bias=False, correlation=0.0, sparsity=0.0, task_correlation=0.0, sin_scale=1.0, length_scale=1.0):
+        assert length_scale > 0, "length_scale must be positive"
+        self.length_scale = length_scale
+        assert sin_scale > 0, "sin_scale must be positive"
+        self.sin_scale = sin_scale
+        super().__init__(
+            latent_dim=latent_dim, num_samples=num_samples, num_tasks=num_tasks, embedding_fn=embedding_fn,
+            task_dim=task_dim, bias=bias, correlation=correlation, sparsity=sparsity, task_correlation=task_correlation
+        )
+
+    @torch.no_grad()
+    def _generate_labels(self):
+        task_proj = torch.einsum('ni,ijd->njd', self.latents, self.task_weights) + self.task_bias  # (N, D, T)
+        self.log_scale = torch.rand(self.task_dim, self.num_tasks) * 2 - 1  # uniform over [-1, 1]
+        waveform = torch.sin((task_proj) * self.sin_scale * np.pi * torch.exp(self.log_scale))  # (N, D, T)
+        waveform_prod = waveform.prod(dim=1)  # (N, T)
+        waveform_prod = waveform_prod / torch.max(torch.abs(waveform_prod), dim=0, keepdim=True)[0]  # Normalize to [-1, 1] across samples for each task
+        envelope = torch.exp(-torch.square(torch.norm(task_proj, dim=1, keepdim=False) / (2 * self.length_scale ** 2)))  # (N, T)
+        self.task_labels = (waveform_prod * envelope)  # (N, T)
+
+
 class LatentMLPDataset(torch.utils.data.Dataset):
     def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, sparsity=0.0, mlp_nonlinearity="relu", mlp_hidden_dim=64, correlation=0.0):
         self.latent_dim = latent_dim
@@ -224,6 +331,9 @@ class LatentMLPDataset(torch.utils.data.Dataset):
             mlps.append(mlp)
         self.mlps = nn.ModuleList(mlps)
 
+        self._generate_labels()
+
+    def _generate_labels(self):
         self.task_targets = torch.cat([
             mlp(self.latents) for t, mlp in enumerate(self.mlps)
         ], dim=-1)
@@ -233,6 +343,111 @@ class LatentMLPDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return self.latents[idx], self.representations[idx], self.task_targets[idx]
+
+
+class LatentGPDataset(torch.utils.data.Dataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, length_scale=0.5, correlation=0.0):
+        self.latent_dim = latent_dim
+        self.num_samples = num_samples
+        self.embedding_fn = embedding_fn
+        self.num_tasks = num_tasks
+        self.length_scale = length_scale
+        self.correlation = correlation
+
+        if correlation != 0.0:
+            covariance = torch.eye(latent_dim) * (1 - correlation) + torch.ones((latent_dim, latent_dim)) * correlation
+            self.data_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(latent_dim), covariance
+            )
+        else:
+            self.data_dist = torch.distributions.normal.Normal(
+                torch.zeros(latent_dim), torch.ones(latent_dim)
+            )
+
+        self._init_data()
+
+    @torch.no_grad()
+    def _init_data(self):
+        import sklearn.gaussian_process as skgp
+        import sklearn.preprocessing as skp
+
+        def _make_gp(data_dist, length_scale=.5, train_samples=1000, **kwargs):
+            rb_kern = skgp.kernels.RBF(length_scale=length_scale)
+            gp_t = skgp.GaussianProcessRegressor(kernel=rb_kern)
+            in_samps = data_dist.sample((train_samples,))
+            samp_proc = gp_t.sample_y(in_samps)
+            samp_proc = skp.StandardScaler().fit_transform(samp_proc)
+            gp_t.fit(in_samps, samp_proc)
+            return gp_t
+
+        self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
+        self.representations = self.embedding_fn(self.latents)  # (N, R)
+        gps = []
+        for i in range(self.num_tasks):
+            gp = _make_gp(self.data_dist, self.length_scale)
+            gps.append(gp)
+        self.gps = gps
+
+        self._generate_labels()
+
+    @torch.no_grad()
+    def _generate_labels(self):
+        labels = []
+        for gp in self.gps:
+            labels.append(
+                torch.sign(torch.from_numpy(gp.predict(self.latents)))
+            )
+        self.task_labels = torch.stack(labels, dim=-1)
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return self.latents[idx], self.representations[idx], self.task_labels[idx]
+
+
+class LatentGridClassificationDataset(torch.utils.data.Dataset):
+    def __init__(self, latent_dim, num_samples, num_tasks, embedding_fn, divisions=3, correlation=0.0):
+        self.latent_dim = latent_dim
+        self.num_samples = num_samples
+        self.num_tasks = num_tasks
+        self.embedding_fn = embedding_fn
+        self.divisions = divisions
+        self.correlation = correlation
+
+        if correlation != 0.0:
+            covariance = torch.eye(latent_dim) * (1 - correlation) + torch.ones((latent_dim, latent_dim)) * correlation
+            self.data_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(latent_dim), covariance
+            )
+        else:
+            self.data_dist = torch.distributions.normal.Normal(
+            torch.zeros(latent_dim), torch.ones(latent_dim)
+        )
+
+        self._init_data()
+
+    @torch.no_grad()
+    def _init_data(self):
+        normal_dist = torch.distributions.Normal(loc=0.0, scale=1.0)
+        q = torch.linspace(0.0, 1.0, self.divisions + 1)[1:-1]  # Exclude 0 and 1 to avoid infinities
+        self.axis_values = normal_dist.icdf(q)
+        self.latents = self.data_dist.sample((self.num_samples,))  # (N, L)
+        self.representations = self.embedding_fn(self.latents)  # (N, R)
+
+        self._generate_labels()
+
+    def _generate_labels(self):
+        grid_indices = torch.searchsorted(self.axis_values, self.latents)  # (N, L), values in [0, divisions]
+        grid_indices_flat = grid_indices @ (self.divisions ** torch.arange(self.latent_dim))  # (N,), unique index for each grid cell
+        grid_labels = (torch.rand(self.divisions ** self.latent_dim, self.num_tasks) > 0.5).float() * 2 - 1  # Assign random label in [-1, 1] to each grid cell
+        self.task_labels = grid_labels[grid_indices_flat, :]
+
+    def __len__(self):
+        return self.latents.shape[0]
+
+    def __getitem__(self, idx):
+        return self.latents[idx], self.representations[idx], self.task_labels[idx]
 
 
 # ==== Embedding network ==== #

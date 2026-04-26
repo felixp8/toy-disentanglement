@@ -3,7 +3,7 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 RUN_DIR = Path("../runs/")
-sweep_id = 14
+sweep_id = 27
 
 for run in RUN_DIR.glob("*"):
     if not run.is_dir():

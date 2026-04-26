@@ -1,0 +1,5 @@
+_target_: toy_disentanglement.task.LatentGridClassificationDataset
+latent_dim: ${embedding.input_dim}
+num_samples: 16384
+num_tasks: 5
+divisions: 3
